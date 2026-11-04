@@ -9,6 +9,10 @@
 #include "platform/X87Precision.h"
 #include "moho/misc/TimeBar.h"
 
+#if defined(FAF_POSIX)
+#include "platform/posix/shell/Shell.h"
+#endif
+
 #include <algorithm>
 #include <atomic>
 #include <cfloat>
@@ -63,6 +67,10 @@ float moho::REN_DebugTextScale()
       scale = static_cast<float>(value.GetNumber());
     }
   }
+#if defined(FAF_POSIX)
+  // macOS: FAF's layout scale is UI Scale times the display correction (CScApp.cpp).
+  scale *= faf_posix::shell::LastUiScaleCorrection();
+#endif
   return std::clamp(scale, 0.5f, 4.0f);
 }
 

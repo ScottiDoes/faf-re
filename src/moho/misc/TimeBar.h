@@ -150,7 +150,8 @@ namespace moho
    * Engine addition (SimDriver.cpp): the text scale of the engine-drawn debug overlays, the
    * time bars (ren_ShowFrameTimes), the network-stats HUD (ren_ShowNetworkStats) and the
    * bandwidth graph (ren_ShowBandwidthUsage), which retail draws at a fixed 10pt: the
-   * current profile's ui_scale option, as FAF's UI uses it. 1 when unset.
+   * current profile's ui_scale option, as FAF's UI uses it. On macOS times the display
+   * correction FAF's layout is scaled by (platform/posix/shell/Shell.h). 1 when unset.
    */
   [[nodiscard]] float REN_DebugTextScale();
 } // namespace moho

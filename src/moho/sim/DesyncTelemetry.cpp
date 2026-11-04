@@ -27,6 +27,9 @@
 #include <sys/time.h>
 #include <sys/utsname.h>
 #include <unistd.h>
+#if defined(__APPLE__) && !defined(MSG_NOSIGNAL)
+#define MSG_NOSIGNAL 0 // macOS: the socket's SO_NOSIGPIPE instead (Post)
+#endif
 #endif
 
 #include "gpg/core/diagnostics/BuildInfo.h"
@@ -304,6 +307,10 @@ namespace moho
         if (fd < 0) {
           continue;
         }
+#if defined(__APPLE__)
+        const int noSigPipe = 1;
+        (void)::setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &noSigPipe, sizeof(noSigPipe));
+#endif
         timeval timeout{kind.mTimeoutMs / 1000, 0};
         (void)::setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
         (void)::setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof(timeout));
@@ -317,7 +324,7 @@ namespace moho
           request += "\r\n" + body;
           std::size_t written = 0; // a dump is megabytes: send() may take it in parts
           while (written < request.size()) {
-            const ssize_t part = ::send(fd, request.data() + written, request.size() - written, MSG_NOSIGNAL);
+            const ssize_t part = ::send(fd, static_cast<const void*>(request.data() + written), request.size() - written, MSG_NOSIGNAL);
             if (part <= 0) {
               break;
             }
@@ -325,7 +332,7 @@ namespace moho
           }
           if (written == request.size()) {
             char reply[64] = {};
-            const ssize_t got = ::recv(fd, reply, sizeof(reply) - 1u, 0);
+            const ssize_t got = ::recv(fd, static_cast<void*>(reply), sizeof(reply) - 1u, 0);
             if (got > 12 && std::strncmp(reply, "HTTP/1.", 7) == 0) {
               status = std::atoi(reply + 9);
             }

@@ -474,7 +474,7 @@ namespace
 
   [[nodiscard]] std::int32_t ReadAtomicI32(volatile std::int32_t* value)
   {
-#if defined(_WIN32)
+#if defined(_WIN32) || defined(FAF_POSIX)
     return static_cast<std::int32_t>(InterlockedCompareExchange(reinterpret_cast<volatile platform::InterlockedLong*>(value), 0, 0));
 #else
     return *value;
@@ -483,7 +483,7 @@ namespace
 
   void AtomicStoreI32(volatile std::int32_t* value, const std::int32_t wanted)
   {
-#if defined(_WIN32)
+#if defined(_WIN32) || defined(FAF_POSIX)
     for (;;) {
       const std::int32_t observed = ReadAtomicI32(value);
       const std::int32_t exchanged = static_cast<std::int32_t>(InterlockedCompareExchange(
@@ -500,7 +500,7 @@ namespace
 
   [[nodiscard]] std::int32_t AtomicExchangeI32(volatile std::int32_t* value, const std::int32_t wanted)
   {
-#if defined(_WIN32)
+#if defined(_WIN32) || defined(FAF_POSIX)
     for (;;) {
       const std::int32_t observed = ReadAtomicI32(value);
       const std::int32_t exchanged = static_cast<std::int32_t>(InterlockedCompareExchange(
@@ -520,7 +520,7 @@ namespace
   [[nodiscard]] std::int32_t AtomicStoreSlotFromPtr(volatile std::int32_t* const slot, const std::int32_t* const wanted)
   {
     const std::int32_t target = wanted ? *wanted : 0;
-#if defined(_WIN32)
+#if defined(_WIN32) || defined(FAF_POSIX)
     for (;;) {
       const std::int32_t observed = ReadAtomicI32(slot);
       const std::int32_t exchanged = static_cast<std::int32_t>(InterlockedCompareExchange(
@@ -558,7 +558,7 @@ namespace
    */
   [[nodiscard]] std::int32_t SyncRealtimeValueBitsFromPrimary(moho::StatItem* const item)
   {
-#if defined(_WIN32)
+#if defined(_WIN32) || defined(FAF_POSIX)
     for (;;) {
       const std::int32_t observedRealtime = ReadAtomicI32(&item->mRealtimeValueBits);
       const std::int32_t observedPrimary = ReadAtomicI32(&item->mPrimaryValueBits);
@@ -2124,7 +2124,7 @@ namespace moho
   std::int32_t StatItem::AddFloat(float* const delta)
   {
     volatile std::int32_t* const pCounter = &mPrimaryValueBits;
-#if defined(_WIN32)
+#if defined(_WIN32) || defined(FAF_POSIX)
     do {
       const std::int32_t observedBits = ReadAtomicI32(pCounter);
       const float currentValue = AsFloatBits(observedBits);

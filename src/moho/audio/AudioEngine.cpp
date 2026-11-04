@@ -15,7 +15,14 @@
 #include <windows.h>
 #include <mmreg.h>
 #include <mmsystem.h>
+#if defined(FAF_POSIX)
+// DirectSound is Windows-only: the stand-in header (func_InitSound reads the speaker
+// layout through it). XACT's runtime is FAudio's FACT behind the engine's XACT 2 vtables.
+#include "platform/posix/stubs/audio-movie/include/dsound.h"
+#include "platform/posix/audio/FactXact.h"
+#else
 #include <dsound.h>
+#endif
 #include <boost/ptr_container/exception.hpp>
 
 #include "gpg/core/algorithms/MD5.h"
@@ -1278,6 +1285,12 @@ namespace moho
    */
   int func_CreateXACTinstance(const std::uint32_t mode, void** const outEngine)
   {
+#if defined(FAF_POSIX)
+    // No COM or registry: the XACT 2 engine object comes from the FACT adapters
+    // (platform/posix/audio/FactXact.cpp), uninitialized with one reference, as
+    // CoCreateInstance returns it. FACT has no debug or audition engine.
+    return faf_posix::audio::CreateXactEngine(mode, outEngine);
+#else
     std::uint32_t debug = (mode >> 1u) & 1u;
     const std::uint32_t audition = mode & 1u;
     const std::uint32_t auditionMode = audition;
@@ -1318,6 +1331,7 @@ namespace moho
       result = CoCreateInstance(kXactComInterfaceClsid, nullptr, CLSCTX_INPROC_SERVER, kXactComInterfaceRiid, outEngine);
     }
     return result;
+#endif
   }
 
   void func_RetreiveXACTCOMInterface(AudioEngineImpl* impl);

@@ -23,6 +23,11 @@
 #include <string>
 #include <system_error>
 #include <direct.h>
+#if defined(__APPLE__)
+#include <mach-o/dyld.h>
+
+#include <climits>
+#endif
 
 #include <Windows.h>
 #include <mmsystem.h>
@@ -717,6 +722,59 @@ namespace
     moho::SCR_AddHookDirectory("/fafengine");
     gpg::Logf("engine hooks: %s mounted at /fafengine", folderUtf8.c_str());
   }
+
+#if defined(FAF_POSIX)
+  /** The running executable's folder (symlinks resolved), or empty. */
+  [[nodiscard]] std::filesystem::path ExecutableFolder()
+  {
+#if defined(__APPLE__)
+    char path[PATH_MAX]{};
+    std::uint32_t size = sizeof(path);
+    char resolved[PATH_MAX]{};
+    if (::_NSGetExecutablePath(path, &size) == 0 && ::realpath(path, resolved) != nullptr) {
+      return std::filesystem::path(resolved).parent_path();
+    }
+#endif
+    return {};
+  }
+
+  /**
+   * macOS addition: the native build's own engine Lua, mounted at /fafengine-macos and
+   * registered as a hook directory like `fafengine` above. Its hook scales FAF's UI to the
+   * display panel (platform/posix/shell/Shell.h, UiScaleCorrection). Looked for next to
+   * `fafengine` (the run folder), then in the app bundle the game runs from
+   * (Contents/Resources/fafengine-macos, macos/app/make_app.sh), and only for a development
+   * build outside an app bundle in the source tree it was built from (FAF_MACOS_LUA_DIR,
+   * macos/fafengine-macos). A packaged app must not reach for the build machine's tree: on
+   * another Mac that path can exist over a network share, and every script load then probes
+   * it (a game stalled loading its blueprints that way).
+   */
+  void AppendMacosHookFolder(msvc8::vector<moho::SVFSMountPoint>& mountPoints)
+  {
+    std::error_code error;
+    std::filesystem::path folder("fafengine-macos");
+    const std::filesystem::path executableFolder = ExecutableFolder();
+    const bool inAppBundle =
+      executableFolder.filename() == "MacOS" && executableFolder.parent_path().filename() == "Contents";
+    if (inAppBundle && !std::filesystem::is_directory(folder, error)) {
+      folder = executableFolder.parent_path() / "Resources" / "fafengine-macos";
+    }
+#if defined(FAF_MACOS_LUA_DIR)
+    if (!inAppBundle && !std::filesystem::is_directory(folder, error)) {
+      folder = std::filesystem::path(FAF_MACOS_LUA_DIR);
+    }
+#endif
+    if (!std::filesystem::is_directory(folder, error)) {
+      gpg::Warnf("engine hooks: no fafengine-macos folder; the UI is not scaled to the display panel");
+      return;
+    }
+    const std::filesystem::path absolute = std::filesystem::absolute(folder, error);
+    const std::string folderUtf8 = (error ? folder : absolute).string();
+    mountPoints.push_back(moho::SVFSMountPoint(folderUtf8.c_str(), "/fafengine-macos"));
+    moho::SCR_AddHookDirectory("/fafengine-macos");
+    gpg::Logf("engine hooks: %s mounted at /fafengine-macos", folderUtf8.c_str());
+  }
+#endif
 
   /**
    * Address: 0x008C7C30 (FUN_008C7C30, Moho::CUserPrefs::StringObject)
@@ -3937,6 +3995,27 @@ msvc8::string moho::USER_GetAppLocalDataDir()
   return outDir;
 }
 
+#if defined(FAF_POSIX)
+namespace
+{
+  // The engine's paths are Windows-form ("C:\Users\...", from SHGetFolderPath and friends),
+  // which the compat file layer maps to the host filesystem. std::ofstream and
+  // std::filesystem do not go through that layer, and on POSIX would create a file or
+  // directory literally named "C:\Users\..." in the current directory.
+  [[nodiscard]] std::string HostPathForStdLib(const wchar_t* const windowsPath)
+  {
+    const std::size_t needed = ::faf_posixHostPathW(windowsPath, nullptr, 0u);
+    if (needed == 0u) {
+      return std::string();
+    }
+    std::string hostPath(needed, '\0');
+    const std::size_t length = ::faf_posixHostPathW(windowsPath, hostPath.data(), hostPath.size());
+    hostPath.resize(length < needed ? length : 0u);
+    return hostPath;
+  }
+} // namespace
+#endif
+
 /**
  * Address: 0x008C9F90 (FUN_008C9F90)
  *
@@ -3967,7 +4046,13 @@ msvc8::string moho::USER_GetAppCacheDir()
   }
 
   std::error_code createDirectoryError;
+#if defined(FAF_POSIX)
+  std::filesystem::create_directories(
+    std::filesystem::path(HostPathForStdLib(cachePath.wstring().c_str())), createDirectoryError
+  );
+#else
   std::filesystem::create_directories(cachePath, createDirectoryError);
+#endif
 
   outDir.assign_owned(cachePath.generic_string());
   return outDir;
@@ -4314,6 +4399,9 @@ bool moho::DISK_SetupDataAndSearchPaths(msvc8::string dataPathScriptName, const 
     mountPoints = CollectMountPointsFromLua(startupState);
     ApplyHookDirectoriesFromLua(startupState);
     AppendEngineHookFolder(mountPoints);
+#if defined(FAF_POSIX)
+    AppendMacosHookFolder(mountPoints);
+#endif
   }
 
   {
@@ -4491,7 +4579,13 @@ void moho::USER_SavePreferences()
   const std::wstring preferencesPathWide = gpg::STR_Utf8ToWide(preferencesPathText != nullptr ? preferencesPathText : "");
   const std::wstring temporaryPathWide = preferencesPathWide + L".new";
 
+#if defined(FAF_POSIX)
+  // libc++ has no std::ofstream(const wchar_t*) (an MSVC extension): open by the host path.
+  const std::string temporaryHostPath = HostPathForStdLib(temporaryPathWide.c_str());
+  std::ofstream outputStream(temporaryHostPath.c_str());
+#else
   std::ofstream outputStream(temporaryPathWide.c_str());
+#endif
   if (!outputStream.is_open()) {
     const std::wstring warningWide = std::wstring(L"Unable to open preference file: ") + temporaryPathWide;
     const msvc8::string warningUtf8 = gpg::STR_WideToUtf8(warningWide.c_str());

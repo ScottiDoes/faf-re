@@ -41,7 +41,20 @@
  *     GPG_PREREGISTER_INIT(SFootprintTypeInfo, register_SFootprintTypeInfo)
  */
 
-#if defined(_WIN32)
+#if defined(FAF_POSIX)
+/*
+ * Mach-O has no `.CRT$XCL`: the entries go to their own section instead, and
+ * platform/posix/StaticInitPreRegister.cpp - the first object the engine links,
+ * so its initializer runs before every other one - calls them all.
+ */
+#define GPG_PREREGISTER_INIT(TAG, FN)                                              \
+  static void gGpgPreRegisterThunk_##TAG()                                         \
+  {                                                                                \
+    (void)FN();                                                                    \
+  }                                                                                \
+  __attribute__((used, section("__DATA,__faf_prereg"))) static void (*const        \
+    gGpgPreRegisterInit_##TAG)() = &gGpgPreRegisterThunk_##TAG;
+#elif defined(_WIN32)
 #define GPG_PREREGISTER_INIT(TAG, FN)                                              \
   static void __cdecl gGpgPreRegisterThunk_##TAG()                                 \
   {                                                                                \

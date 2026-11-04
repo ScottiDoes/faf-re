@@ -12,7 +12,7 @@
 #include "CHostManager.h"
 #include "CGpgNetInterface.h"
 #include "CNetNullConnector.h"
-#if defined(_WIN32)
+#if defined(_WIN32) || defined(FAF_POSIX)
 #include "CNetTCPConnector.h"
 #include "CNetUDPConnector.h"
 #else
@@ -724,7 +724,7 @@ SNetCommandArg moho::NET_DecodeSocketArg(gpg::BinaryReader& reader)
  */
 bool moho::NET_Init()
 {
-#if defined(_WIN32)
+#if defined(_WIN32) || defined(FAF_POSIX)
   static bool sWinsockInitialized = false;
   if (!sWinsockInitialized) {
     WSAData wsaData;
@@ -786,7 +786,7 @@ INetConnector* moho::NET_MakeConnector(
  */
 INetConnector* moho::NET_MakeUDPConnector(const u_short port, boost::weak_ptr<INetNATTraversalProvider> prov)
 {
-#if defined(_WIN32)
+#if defined(_WIN32) || defined(FAF_POSIX)
   if (!NET_Init()) {
     return nullptr;
   }
@@ -808,7 +808,11 @@ INetConnector* moho::NET_MakeUDPConnector(const u_short port, boost::weak_ptr<IN
   sockaddr_in name;
   name.sin_family = AF_INET;
   name.sin_port = ::htons(port);
+#if defined(FAF_POSIX)
+  name.sin_addr.s_addr = ::htonl(0); // BSD in_addr has no S_un union
+#else
   name.sin_addr.S_un.S_addr = ::htonl(0);
+#endif
   if (::bind(sock, (SOCKADDR*)&name, sizeof(name)) == SOCKET_ERROR) {
     gpg::Logf("NET_MakeUDPConnector: bind(%d) failed: %s", port, NET_GetWinsockErrorString());
     ::closesocket(sock);
@@ -847,7 +851,7 @@ INetConnector* moho::NET_MakeUDPConnector(const u_short port, boost::weak_ptr<IN
  */
 INetConnector* moho::NET_MakeTCPConnector(const u_short port)
 {
-#if defined(_WIN32)
+#if defined(_WIN32) || defined(FAF_POSIX)
   if (!NET_Init()) {
     return nullptr;
   }
@@ -894,7 +898,7 @@ INetConnector* moho::NET_MakeTCPConnector(const u_short port)
 #endif
 }
 
-#if !defined(_WIN32)
+#if !defined(_WIN32) && !defined(FAF_POSIX)
 /**
  * Engine addition (dedicated-server plan WPL.5): moho/net/INetTCPSocket.cpp (the Winsock TCP
  * socket) is Windows only. NET_Init fails here, and NET_TCPConnect fails as the Windows
@@ -942,7 +946,7 @@ msvc8::string moho::NET_GetHostName(const u_long address)
  */
 const char* moho::NET_GetWinsockErrorString() noexcept
 {
-#if defined(_WIN32)
+#if defined(_WIN32) || defined(FAF_POSIX)
   const int e = ::WSAGetLastError();
   if (e == 0) {
     return "NOERROR";

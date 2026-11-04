@@ -348,7 +348,7 @@ namespace
     if (!statItem) {
       return;
     }
-#if defined(_WIN32)
+#if defined(_WIN32) || defined(FAF_POSIX)
     InterlockedExchangeAdd(reinterpret_cast<volatile platform::InterlockedLong*>(&statItem->mPrimaryValueBits), delta);
 #else
     statItem->mPrimaryValueBits += static_cast<std::int32_t>(delta);

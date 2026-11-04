@@ -35,5 +35,31 @@ namespace lua
    * freed: the engine pushes a handful of pointers.
    */
   [[nodiscard]] void* const* ArenaLightCell(void* pointer) noexcept;
+
+#if defined(FAF_POSIX)
+  // macOS keeps the low 4 GB unmapped for every process (__PAGEZERO), so the range lies above it:
+  // a 4-byte field holds the offset from gArenaPointerBase, just below the range; 0 stays null.
+  extern std::uintptr_t gArenaPointerBase;
+#endif
+
+  /** A Lua object's pointer as its 4-byte field holds it (LuaPrimitives.h), 0 for null. */
+  [[nodiscard]] inline std::uint32_t ArenaPointerBits(const void* const pointer) noexcept
+  {
+#if defined(FAF_POSIX)
+    return pointer != nullptr ? static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(pointer) - gArenaPointerBase) : 0u;
+#else
+    return static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(pointer));
+#endif
+  }
+
+  /** The pointer a 4-byte field holds. */
+  [[nodiscard]] inline void* ArenaPointerFromBits(const std::uint32_t bits) noexcept
+  {
+#if defined(FAF_POSIX)
+    return bits != 0u ? reinterpret_cast<void*>(gArenaPointerBase + bits) : nullptr;
+#else
+    return reinterpret_cast<void*>(static_cast<std::uintptr_t>(bits));
+#endif
+  }
 } // namespace lua
 #endif

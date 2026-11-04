@@ -139,6 +139,18 @@ namespace
 
   void Reserve() noexcept
   {
+#if defined(FAF_POSIX)
+    // macOS: the low 4 GB is never free (LuaArena.h), so the range goes where the system puts it
+    // and fields hold offsets from 64 KB below it, which keeps every object's offset above 0.
+    for (std::size_t bytes = kMaxReserveBytes; bytes >= kMinReserveBytes && gBase == 0; bytes /= 2u) {
+      void* const mapped = ::mmap(nullptr, bytes, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE, -1, 0);
+      if (mapped != MAP_FAILED) {
+        gBase = reinterpret_cast<std::uintptr_t>(mapped);
+        gReserveBytes = bytes;
+        lua::gArenaPointerBase = gBase - (std::uintptr_t{1} << 16);
+      }
+    }
+#endif
     // Every span of the range has to read back from 32 bits, so it ends below 4 GB. A crowded process
     // (overlays, injected DLLs) gets a smaller range before it gets none.
     for (std::size_t bytes = kMaxReserveBytes; bytes >= kMinReserveBytes && gBase == 0; bytes /= 2u) {
@@ -343,6 +355,10 @@ namespace
 
 namespace lua
 {
+#if defined(FAF_POSIX)
+  std::uintptr_t gArenaPointerBase = 0;
+#endif
+
   void ArenaReserve() noexcept
   {
     std::call_once(gReserveOnce, &Reserve);

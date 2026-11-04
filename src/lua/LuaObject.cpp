@@ -58,6 +58,9 @@
 #include "moho/sim/SimThreadRole.h"
 #include "moho/sim/SimWorkerPool.h"
 #include "moho/console/CConCommand.h"
+#if defined(FAF_POSIX)
+#include "LuaPosixNumbers.h"
+#endif
 
 using namespace LuaPlus;
 
@@ -119,6 +122,13 @@ extern "C" void __cdecl _dosmaperr(unsigned long) {}
  */
 extern "C" std::FILE* __cdecl __iob_func(void)
 {
+#if defined(FAF_POSIX)
+	// Darwin's stdin/stdout/stderr are the contiguous `__sF[3]`, the layout callers assume
+	// for `_iob[0..2]` (`&__iob_func()[2]` is stderr).
+	if (stdin + 1 == stdout && stdin + 2 == stderr) {
+		return stdin;
+	}
+#endif
 	using AcrtIobFunc = std::FILE* (__cdecl*)(unsigned int);
 	static AcrtIobFunc sAcrtIobFunc = []() noexcept -> AcrtIobFunc {
 		HMODULE const ucrtModule = ::GetModuleHandleA("ucrtbase.dll");
@@ -6500,7 +6510,13 @@ namespace
 	 */
 	int io_clock(lua_State* const state)
 	{
+#if defined(FAF_POSIX)
+		// LP64-11: the UCRT's clock() - wall-clock milliseconds since the process started, a
+		// 32-bit clock_t - not POSIX clock()'s CPU microseconds (platform/posix/compat/Time.h).
+		const int tickCount = faf_posixClock();
+#else
 		const int tickCount = std::clock();
+#endif
 		lua_pushnumber(state, static_cast<lua_Number>(static_cast<float>(tickCount) * 0.001f));
 		return 1;
 	}
@@ -6543,10 +6559,21 @@ namespace
 			if (lua_type(state, firstArgumentIndex) == LUA_TNUMBER) {
 				if (writeSucceeded != 0) {
 					const double value = lua_tonumber(state, firstArgumentIndex);
+#if defined(FAF_POSIX)
+					// The UCRT's spelling of inf/nan (LuaPosixNumbers.h).
+					if (!std::isfinite(value)) {
+						char text[32];
+						(void)faf_lua_posix::FormatNonFiniteUcrt(text, sizeof(text), "%.14g", value);
+						writeSucceeded = std::fputs(text, stream) >= 0 ? 1 : 0;
+					} else {
+						writeSucceeded = std::fprintf(stream, "%.14g", value) > 0 ? 1 : 0;
+					}
+#else
 					// Plan WPL.17: the Windows CRT's NaN text (LuaNumberText.h).
 					char rendered[64];
 					(void)lua::FormatNumberLikeWindowsCrt(rendered, "%.14g", value);
 					writeSucceeded = std::fputs(rendered, stream) >= 0 ? 1 : 0;
+#endif
 				}
 			} else if (lua_type(state, firstArgumentIndex) == LUA_TSTRING) {
 				std::size_t elementCount = 0u;
@@ -6665,6 +6692,52 @@ namespace
 		lua_rawset(state, -3);
 	}
 
+#if defined(FAF_POSIX)
+	/**
+	 * FAF_POSIX: rewrites an os.date format so the C library's strftime gives what the UCRT's
+	 * "C" locale gives: %c is "%m/%d/%y %H:%M:%S" (os.date's default), %x "%m/%d/%y", %X
+	 * "%H:%M:%S"; the '#' flag gives the long date forms for %c/%x and drops leading zeros
+	 * from the numeric fields (the C library's '-' flag). Other directives pass through.
+	 */
+	std::string UcrtStrftimeFormat(const char* const format)
+	{
+		std::string out;
+		for (const char* p = format; *p != '\0'; ++p) {
+			if (*p != '%' || p[1] == '\0') {
+				out.push_back(*p);
+				continue;
+			}
+			++p;
+			bool alternate = false;
+			if (*p == '#' && p[1] != '\0') {
+				alternate = true;
+				++p;
+			}
+			switch (*p) {
+				case 'c':
+					out += alternate ? "%A, %B %d, %Y, %H:%M:%S" : "%m/%d/%y %H:%M:%S";
+					break;
+				case 'x':
+					out += alternate ? "%A, %B %d, %Y" : "%m/%d/%y";
+					break;
+				case 'X':
+					out += "%H:%M:%S";
+					break;
+				case 'd': case 'H': case 'I': case 'j': case 'm': case 'M':
+				case 'S': case 'U': case 'w': case 'W': case 'y': case 'Y':
+					out += alternate ? "%-" : "%";
+					out.push_back(*p);
+					break;
+				default:
+					out.push_back('%');
+					out.push_back(*p);
+					break;
+			}
+		}
+		return out;
+	}
+#endif
+
 	/**
 	 * Address: 0x00916740 (FUN_00916740, lua::os_date)
 	 *
@@ -6719,7 +6792,12 @@ namespace
 		}
 
 		char formatted[256];
+#if defined(FAF_POSIX)
+		const std::string ucrtFormat = UcrtStrftimeFormat(format);
+		if (std::strftime(formatted, sizeof(formatted), ucrtFormat.c_str(), brokenDown) == 0) {
+#else
 		if (std::strftime(formatted, sizeof(formatted), format, brokenDown) == 0) {
+#endif
 			luaL_error(state, "`date' format too long");
 		}
 
@@ -9883,8 +9961,20 @@ namespace
 			case 'f':
 			case 'g':
 			case 'G':
+#if defined(FAF_POSIX)
+			{
+				// The UCRT's spelling of inf/nan (LuaPosixNumbers.h).
+				const double number = static_cast<double>(luaL_checknumber(state, argumentIndex));
+				if (std::isfinite(number)) {
+					std::sprintf(item, form, number);
+				} else {
+					(void)faf_lua_posix::FormatNonFiniteUcrt(item, sizeof(item), form, number);
+				}
+			}
+#else
 				// Plan WPL.17: the Windows CRT's NaN text (LuaNumberText.h).
 				(void)lua::FormatNumberLikeWindowsCrt(item, form, static_cast<double>(luaL_checknumber(state, argumentIndex)));
+#endif
 				break;
 
 			case 'q':
@@ -11286,6 +11376,66 @@ namespace
 	 * Order is taken from the binary's .rdata, not from stock Lua 5.0: this fork
 	 * lists `pow` between `deg` and `rad` rather than after `randomseed`.
 	 */
+#if defined(FAF_POSIX)
+	/**
+	 * FAF_POSIX: runs one `math` function and gives each NaN result that none of its first
+	 * `ArgumentCount` numeric arguments explains - a freshly generated NaN: sqrt(-1), log(-1),
+	 * mod(x, 0), pow(-8, 1/3), acos(2), sin(inf), ... - x86's default NaN 0xFFC00000, so Lua
+	 * sees the x64 build's bits whichever implementation computed it (arm64 makes 0x7FC00000;
+	 * LuaPosixNumbers.h). The common path is one compare per result.
+	 */
+	template <lua_CFunction Function, int ArgumentCount>
+	int LuaMathX86NaN(lua_State* const state)
+	{
+		const int resultCount = Function(state);
+		StkId const firstResult = state->top - resultCount;
+		for (StkId slot = firstResult; slot < state->top; ++slot) {
+			if (slot->tt == LUA_TNUMBER && slot->value.n != slot->value.n) {
+				const int argumentCount = static_cast<int>(firstResult - state->base);
+				bool argumentIsNaN = false;
+				for (int argument = 1; argument <= ArgumentCount && argument <= argumentCount; ++argument) {
+					if (lua_isnumber(state, argument) != 0) {
+						const lua_Number value = lua_tonumber(state, argument);
+						argumentIsNaN = argumentIsNaN || value != value;
+					}
+				}
+				if (!argumentIsNaN) {
+					slot->value.n = faf_lua_posix::X86DefaultNaN();
+				}
+			}
+		}
+		return resultCount;
+	}
+
+	// abs, min, max, random and randomseed cannot make a NaN from non-NaN arguments.
+	const luaL_reg kLuaMathLib[] = {
+		{"abs", math_abs},
+		{"sin", LuaMathX86NaN<math_sin, 1>},
+		{"cos", LuaMathX86NaN<math_cos, 1>},
+		{"tan", LuaMathX86NaN<math_tan, 1>},
+		{"asin", LuaMathX86NaN<math_asin, 1>},
+		{"acos", LuaMathX86NaN<math_acos, 1>},
+		{"atan", LuaMathX86NaN<math_atan, 1>},
+		{"atan2", LuaMathX86NaN<math_atan2, 2>},
+		{"ceil", LuaMathX86NaN<math_ceil, 1>},
+		{"floor", LuaMathX86NaN<math_floor, 1>},
+		{"mod", LuaMathX86NaN<math_mod, 2>},
+		{"frexp", LuaMathX86NaN<math_frexp, 1>},
+		{"ldexp", LuaMathX86NaN<math_ldexp, 2>},
+		{"sqrt", LuaMathX86NaN<math_sqrt, 1>},
+		{"min", math_min},
+		{"max", math_max},
+		{"log", LuaMathX86NaN<math_log, 1>},
+		{"log10", LuaMathX86NaN<math_log10, 1>},
+		{"exp", LuaMathX86NaN<math_exp, 1>},
+		{"deg", LuaMathX86NaN<math_deg, 1>},
+		{"pow", LuaMathX86NaN<math_pow, 2>},
+		{"rad", LuaMathX86NaN<math_rad, 1>},
+		{"random", math_random},
+		{"randomseed", math_randomseed},
+		{nullptr, nullptr},
+	};
+#else
 	const luaL_reg kLuaMathLib[] = {
 		{"abs", math_abs},          {"sin", math_sin},     {"cos", math_cos},
 		{"tan", math_tan},          {"asin", math_asin},   {"acos", math_acos},
@@ -11298,6 +11448,7 @@ namespace
 		{"randomseed", math_randomseed},
 		{nullptr, nullptr},
 	};
+#endif
 
 	/**
 	 * Address: 0x0091A110 (FUN_0091A110, luaopen_math)
@@ -11319,7 +11470,11 @@ namespace
 		lua_settable(state, -3);
 
 		lua_pushlstring(state, "__pow", 5u);
+#if defined(FAF_POSIX)
+		lua_pushcclosure(state, LuaMathX86NaN<math_pow, 2>, 0);
+#else
 		lua_pushcclosure(state, math_pow, 0);
+#endif
 		lua_settable(state, LUA_GLOBALSINDEX);
 		return 1;
 	}
@@ -14906,6 +15061,41 @@ extern "C"
 	 * considers numeric; any other base parses a string with `strtoul` and
 	 * requires the whole remainder to be blank. Returns nil on failure.
 	 */
+#if defined(FAF_POSIX)
+	/// LP64 (README rule 2): MSVC's `strtoul` is 32-bit. It saturates at 0xFFFFFFFF and
+	/// negates ("-1") in 32 bits; the 64-bit libc one would hand Lua a different number.
+	[[nodiscard]] std::uint32_t StrToULong32(const char* const text, char** const end, const int base)
+	{
+		const char* cursor = text;
+		while (std::isspace(static_cast<unsigned char>(*cursor)) != 0) {
+			++cursor;
+		}
+		bool negative = false;
+		if (*cursor == '+' || *cursor == '-') {
+			negative = *cursor == '-';
+			++cursor;
+		}
+		if (*cursor == '+' || *cursor == '-' || std::isspace(static_cast<unsigned char>(*cursor)) != 0) {
+			*end = const_cast<char*>(text); // no digits
+			return 0u;
+		}
+		errno = 0;
+		char* digitsEnd = nullptr;
+		const unsigned long long magnitude = std::strtoull(cursor, &digitsEnd, base);
+		if (digitsEnd == cursor) {
+			*end = const_cast<char*>(text);
+			return 0u;
+		}
+		*end = digitsEnd;
+		if (errno == ERANGE || magnitude > 0xFFFFFFFFull) {
+			errno = ERANGE;
+			return 0xFFFFFFFFu;
+		}
+		const auto value = static_cast<std::uint32_t>(magnitude);
+		return negative ? static_cast<std::uint32_t>(0u - value) : value;
+	}
+#endif
+
 	int luaB_tonumber(lua_State* const state)
 	{
 		constexpr int kDecimalBase = 10;
@@ -14927,7 +15117,11 @@ extern "C"
 			}
 
 			char* end = nullptr;
+#if defined(FAF_POSIX)
+			const std::uint32_t value = StrToULong32(text, &end, base);
+#else
 			const unsigned long value = std::strtoul(text, &end, base);
+#endif
 			if (text != end) {
 				while (std::isspace(static_cast<unsigned char>(*end)) != 0) {
 					++end;
@@ -16867,8 +17061,18 @@ extern "C"
 		}
 
 		char rendered[32];
+#if defined(FAF_POSIX)
+		// The UCRT's spelling of inf/nan: "-nan(ind)" for x86's default NaN (LuaPosixNumbers.h).
+		const double number = static_cast<double>(object->value.n);
+		if (std::isfinite(number)) {
+			std::sprintf(rendered, "%.14g", number);
+		} else {
+			(void)faf_lua_posix::FormatNonFiniteUcrt(rendered, sizeof(rendered), "%.14g", number);
+		}
+#else
 		// Plan WPL.17: the Windows CRT's NaN text (LuaNumberText.h).
 		(void)lua::FormatNumberLikeWindowsCrt(rendered, "%.14g", static_cast<double>(object->value.n));
+#endif
 
 		TString* const interned = luaS_newlstr(state, rendered, std::strlen(rendered));
 		object->value.p = interned;
@@ -17357,7 +17561,12 @@ extern "C"
 				const TObject* const b = rkb();
 				const TObject* const c = rkc();
 				if (b->tt == LUA_TNUMBER && c->tt == LUA_TNUMBER) {
+#if defined(FAF_POSIX)
+					// A NaN from non-NaN operands gets x86's encoding (LuaPosixNumbers.h).
+					ra->value.n = faf_lua_posix::FreshNaNToX86(c->value.n + b->value.n, c->value.n, b->value.n);
+#else
 					ra->value.n = c->value.n + b->value.n;
+#endif
 					ra->tt = LUA_TNUMBER;
 				} else {
 					// Note there is no string coercion here: unlike stock Lua,
@@ -17372,7 +17581,12 @@ extern "C"
 				const TObject* const b = rkb();
 				const TObject* const c = rkc();
 				if (b->tt == LUA_TNUMBER && c->tt == LUA_TNUMBER) {
+#if defined(FAF_POSIX)
+					// A NaN from non-NaN operands gets x86's encoding (LuaPosixNumbers.h).
+					ra->value.n = faf_lua_posix::FreshNaNToX86(b->value.n - c->value.n, b->value.n, c->value.n);
+#else
 					ra->value.n = b->value.n - c->value.n;
+#endif
 					ra->tt = LUA_TNUMBER;
 				} else {
 					(void)CallBinTmOrRaiseArithmeticTypeError(
@@ -17385,7 +17599,12 @@ extern "C"
 				const TObject* const b = rkb();
 				const TObject* const c = rkc();
 				if (b->tt == LUA_TNUMBER && c->tt == LUA_TNUMBER) {
+#if defined(FAF_POSIX)
+					// A NaN from non-NaN operands gets x86's encoding (LuaPosixNumbers.h).
+					ra->value.n = faf_lua_posix::FreshNaNToX86(c->value.n * b->value.n, c->value.n, b->value.n);
+#else
 					ra->value.n = c->value.n * b->value.n;
+#endif
 					ra->tt = LUA_TNUMBER;
 				} else {
 					(void)CallBinTmOrRaiseArithmeticTypeError(
@@ -17398,7 +17617,12 @@ extern "C"
 				const TObject* const b = rkb();
 				const TObject* const c = rkc();
 				if (b->tt == LUA_TNUMBER && c->tt == LUA_TNUMBER) {
+#if defined(FAF_POSIX)
+					// A NaN from non-NaN operands gets x86's encoding (LuaPosixNumbers.h).
+					ra->value.n = faf_lua_posix::FreshNaNToX86(b->value.n / c->value.n, b->value.n, c->value.n);
+#else
 					ra->value.n = b->value.n / c->value.n;
+#endif
 					ra->tt = LUA_TNUMBER;
 				} else {
 					(void)CallBinTmOrRaiseArithmeticTypeError(

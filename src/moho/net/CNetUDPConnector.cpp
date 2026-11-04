@@ -58,7 +58,7 @@ ENetProtocolType CNetUDPConnector::GetProtocol()
  */
 bool CNetUDPConnector::SignalSocketEvent() noexcept
 {
-#if defined(_WIN32)
+#if defined(_WIN32) || defined(FAF_POSIX)
   return ::WSASetEvent(event_) != FALSE;
 #else
   return false;
@@ -99,7 +99,7 @@ CNetUDPConnector::~CNetUDPConnector()
     delete static_cast<SNetPacket*>(mPacketList.mNext);
   }
 
-#if defined(_WIN32)
+#if defined(_WIN32) || defined(FAF_POSIX)
   if (socket_ != INVALID_SOCKET)
     closesocket(socket_);
 #endif
@@ -204,7 +204,7 @@ void CNetUDPConnector::Destroy()
   }
 
   mClosed = true;
-#if defined(_WIN32)
+#if defined(_WIN32) || defined(FAF_POSIX)
   SignalSocketEvent();
 #endif
 }
@@ -236,7 +236,7 @@ u_short CNetUDPConnector::GetLocalPort()
 CNetUDPConnection* CNetUDPConnector::Connect(const u_long address, const u_short port)
 {
   boost::recursive_mutex::scoped_lock lock{lock_};
-#if defined(_WIN32)
+#if defined(_WIN32) || defined(FAF_POSIX)
   SignalSocketEvent();
 #endif
 
@@ -382,7 +382,7 @@ void CNetUDPConnector::Pull()
 
   mIsPulling = false;
   if (mClosed) {
-#if defined(_WIN32)
+#if defined(_WIN32) || defined(FAF_POSIX)
     SignalSocketEvent();
 #endif
   }
@@ -407,7 +407,7 @@ void CNetUDPConnector::Push()
   }
 
   if (didFlush) {
-#if defined(_WIN32)
+#if defined(_WIN32) || defined(FAF_POSIX)
     SignalSocketEvent();
 #endif
   }
@@ -424,7 +424,7 @@ void CNetUDPConnector::SelectEvent(const HANDLE ev)
 {
   boost::recursive_mutex::scoped_lock lock{lock_};
   mSelectedEvent = ev;
-#if defined(_WIN32)
+#if defined(_WIN32) || defined(FAF_POSIX)
   SignalSocketEvent();
 #endif
 }
@@ -608,7 +608,7 @@ void CNetUDPConnector::HandleReceivedDatagram(
     ) {
       packet->ListUnlink();
       mInboundTraversalPackets.push_back({packet, addrHost, portHost});
-#if defined(_WIN32)
+#if defined(_WIN32) || defined(FAF_POSIX)
       if (mSelectedEvent) {
         SetEvent(mSelectedEvent);
       }
@@ -812,7 +812,7 @@ void CNetUDPConnector::ProcessConnect(const SNetPacket* packet, const u_long add
   }
 
   newConnection->ProcessConnect(packet);
-#if defined(_WIN32)
+#if defined(_WIN32) || defined(FAF_POSIX)
   if (mSelectedEvent) {
     SetEvent(mSelectedEvent);
   }
@@ -954,7 +954,7 @@ void CNetUDPConnector::ReceivePacket(const u_long address, const u_short port, c
   const SReceivePacket r{packet, address, port};
   mOutboundPackets.push_back(r);
 
-#if defined(_WIN32)
+#if defined(_WIN32) || defined(FAF_POSIX)
   SignalSocketEvent();
 #endif
 }
@@ -1056,7 +1056,11 @@ int32_t CNetUDPConnector::SendData()
     sockaddr_in name;
     name.sin_family = AF_INET;
     name.sin_port = ::htons(packet.mPort);
+#if defined(FAF_POSIX)
+    name.sin_addr.s_addr = ::htonl(packet.mAddr); // BSD in_addr has no S_un union
+#else
     name.sin_addr.S_un.S_addr = ::htonl(packet.mAddr);
+#endif
 
     const auto payload = packet.mPacket->GetPayload();
     const auto payloadSize = packet.mPacket->GetPayloadSize();

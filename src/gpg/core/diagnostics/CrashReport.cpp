@@ -66,24 +66,14 @@ namespace gpg::diag
     }
 
     // ------------------------------------------------------------------
-    // Path resolution (beside the executable, like faf_diag.log)
+    // Path resolution (beside the executable, like faf_diag.log; DiagnosticsDirectory)
     // ------------------------------------------------------------------
 
     void ResolveExeDir(char* outDir, const std::size_t bytes)
     {
-      char exePath[MAX_PATH * 2] = {};
-      const DWORD written = ::GetModuleFileNameA(nullptr, exePath, static_cast<DWORD>(sizeof(exePath)));
-      if (written == 0u || written >= sizeof(exePath)) {
+      if (!DiagnosticsDirectory(outDir, bytes)) {
         (void)::strcpy_s(outDir, bytes, ".");
-        return;
       }
-      char* lastSlash = std::strrchr(exePath, '\\');
-      if (lastSlash == nullptr) {
-        (void)::strcpy_s(outDir, bytes, ".");
-        return;
-      }
-      *(lastSlash + 1) = '\0';
-      (void)::strcpy_s(outDir, bytes, exePath);
     }
 
   } // namespace
@@ -168,6 +158,7 @@ namespace gpg::diag
       // no symbol machinery): the RSDS record carries the signature GUID and
       // age. With this pair, any module+RVA line in this report and the .dmp
       // resolve against exactly one archived PDB.
+#if !defined(FAF_POSIX) // POSIX: a Mach-O image has no PE debug directory
       {
         const HMODULE exeModule = ::GetModuleHandleW(nullptr);
         if (exeModule != nullptr) {
@@ -209,6 +200,7 @@ namespace gpg::diag
           }
         }
       }
+#endif
     }
 
     void WriteProcessSection(std::FILE* const sink)

@@ -1580,7 +1580,7 @@ namespace
     if (!statItem) {
       return;
     }
-#if defined(_WIN32)
+#if defined(_WIN32) || defined(FAF_POSIX)
     InterlockedExchangeAdd(reinterpret_cast<volatile platform::InterlockedLong*>(&statItem->mPrimaryValueBits), delta);
 #else
     statItem->mPrimaryValueBits += static_cast<std::int32_t>(delta);
@@ -6815,7 +6815,7 @@ std::int32_t StorePrimaryStatBitsAtomic(
   const std::int32_t* const newValueBits
 ) noexcept
 {
-#if defined(_WIN32)
+#if defined(_WIN32) || defined(FAF_POSIX)
   volatile platform::InterlockedLong* const slot = reinterpret_cast<volatile platform::InterlockedLong*>(&statItem->mPrimaryValueBits);
   for (;;) {
     const long observed = InterlockedCompareExchange(slot, 0L, 0L);

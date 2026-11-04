@@ -242,7 +242,7 @@ namespace LuaPlus
 		template <class T>
 		ValuePointer& operator=(T* const pointer) noexcept
 		{
-			mBits = static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(pointer));
+			mBits = lua::ArenaPointerBits(pointer);
 			return *this;
 		}
 		ValuePointer& operator=(std::nullptr_t) noexcept
@@ -254,7 +254,7 @@ namespace LuaPlus
 		template <class T>
 		[[nodiscard]] operator T*() const noexcept
 		{
-			return reinterpret_cast<T*>(static_cast<std::uintptr_t>(mBits));
+			return static_cast<T*>(lua::ArenaPointerFromBits(mBits));
 		}
 
 		[[nodiscard]] std::uint32_t Bits() const noexcept { return mBits; }
@@ -279,13 +279,13 @@ namespace LuaPlus
 	{
 	public:
 		ObjectPointer() = default;
-		ObjectPointer(T* const pointer) noexcept : mBits(static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(pointer))) {}
+		ObjectPointer(T* const pointer) noexcept : mBits(lua::ArenaPointerBits(pointer)) {}
 
 		[[nodiscard]] operator T*() const noexcept { return Get(); }
 		[[nodiscard]] T* operator->() const noexcept { return Get(); }
 
 	private:
-		[[nodiscard]] T* Get() const noexcept { return reinterpret_cast<T*>(static_cast<std::uintptr_t>(mBits)); }
+		[[nodiscard]] T* Get() const noexcept { return static_cast<T*>(lua::ArenaPointerFromBits(mBits)); }
 
 		std::uint32_t mBits;
 	};
